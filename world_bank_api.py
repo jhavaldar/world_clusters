@@ -1,6 +1,10 @@
 from bs4 import BeautifulSoup
 import pandas as pd
 import numpy
+import requests
+from math import isnan
+
+bad_rows = ['','S3', 'XM','B8','XH', '8S','T5','XE', 'ZQ', 'OE','V4','ZT','XF','XP','XT','XO','1W','V3','Z4','XC','EU','XU','ZJ','T2','V2','XD','Z7','T4','4E','XL','7E','XJ','XG','S1','XN','S4','T6','ZG','ZF','V1','XI','F1','1A','XQ','T3','T7']
 
 # Helper function for printing a dictionary
 def print_dict(input, sep=' : '):
@@ -76,13 +80,14 @@ def get_total(indicator):
   return total
 
 # Pick the various indicators from an array of topics which meet a minimum number of entries
-def pick_indicators(minimum, indics=[14, 16, 3, 5, 4, 8, 21], outpath="out.csv"):
+def pick_indicators(minimum=200, indics=list(range(1,22)), outpath="out.csv"):
   dict = (get_indicators_from_topics(indics))
   arr = [key for key in dict]
-  filtered = get_useful_indicators(arr,200)
+  filtered = get_useful_indicators(arr,minimum)
   with open(outpath, "w") as fp:
       for indicator in filtered:
         fp.write(indicator+",")
+  return filtered
 
 #Returns dictionary of country codes and names
 def get_codes_dict(inpath="ids_to_names.csv"):
@@ -162,14 +167,15 @@ def clean_cols(inpath='data.csv', outpath='data1.csv', clean_pct=0.65):
   # For each column, check the percenteage of clean entries
   for col_index in list(df.columns)[1:]:
     column = list(df[col_index])
+    # Check if its an empty column
+    if isnan(column[1]):
+      del outdf[col_index]
     clean_entries = len([entry for entry in column if float(entry)!=-1.0])
     e_clean_pct = (clean_entries+0.0)/num_rows
     if e_clean_pct < clean_pct:
       del outdf[col_index]
   print str(len(list(outdf.columns))) + " columns remain"
   outdf.to_csv(outpath)
-
-bad_rows = ['XM','B8','XH', '8S','T5','XE', 'ZQ', 'OE','V4','ZT','XF','XP','XT','XO','1W','V3','Z4','XC','EU','XU','ZJ','T2','V2','XD','Z7','T4','4E','XL','7E','XJ','XG','S1','XN','S4','T6','ZG','ZF','V1','XI','F1','1A','XQ','T3','T7']
 
 # Delete rows which have more than a certain percentage of unfilled_entries,
 # or which are not countries (bad rows)
@@ -180,7 +186,7 @@ def clean_rows(inpath='data1.csv', outpath='data2.csv', clean_pct=0.65):
 
   with open(inpath, "r") as fp:
     for row in fp:
-      row = row.split(",")
+      row = row.strip().split(",")
       if row[0]!='':
         matrix.append(row)
       else:
@@ -189,7 +195,7 @@ def clean_rows(inpath='data1.csv', outpath='data2.csv', clean_pct=0.65):
 
   # For each row, check the number of -1s
   for row in matrix:
-    clean_cols = len([entry for entry in row[2:] if float(entry)!=-1.0])
+    clean_cols = len([entry for entry in row[2:-1] if float(entry)!=-1.0])
     e_clean_pct = (clean_cols/(num_cols-1.0))
     if e_clean_pct > clean_pct:
       new_matrix.append(row)
@@ -219,6 +225,29 @@ def fill_missing_values(inpath="data2.csv", outpath="data3.csv"):
   df.to_csv(outpath)
   print "Replaced missing values"
 
-clean_cols(clean_pct=0.85)
-clean_rows(clean_pct=0.85)
-fill_missing_values()
+def get_name_of_indicator(indic):
+  url = "http://api.worldbank.org/indicator/" + indic
+  soup = get_soup(url)
+  doc = soup.find('indicator').find('name')
+  return doc.get_text()
+
+def indic_names(inpath="feature_clusters.csv", outpath="named_feature_clusters.csv"):
+  df = pd.read_csv(inpath)
+  #del df[list(df.columns)[0]]
+  indics = list(df['indicator'])
+  names = [get_name_of_indicator(indic) for indic in indics]
+  df['indicator_name'] = names
+  df.to_csv(outpath)
+  print "Done"
+
+#chosen = [1,3,4,6,7,8,11,14,15,16,17]
+#pick_indicators(indics=chosen)
+#with open("out.csv", "r") as fp:
+#  chosen = fp.read()
+#arr = chosen.split(",")
+#write_indicator_data(arr, filepath="full_data.csv")
+#clean_cols(inpath="full_data.csv", outpath="full_data_cols.csv", clean_pct=0.80)
+#clean_rows(inpath="full_data_cols.csv", outpath="full_data_rows.csv",clean_pct=0.85)
+#fill_missing_values(inpath="full_data_rows.csv", outpath="full_data_clean.csv",)
+
+#indic_names()
