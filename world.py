@@ -7,73 +7,11 @@ from sklearn.decomposition import PCA
 from sklearn.feature_selection import VarianceThreshold
 from world_bank_api import get_country_from_code, get_name_of_indicator
 import matplotlib.pyplot as plt
+from math import sqrt
 
-def transmeans(inpath = "transpose.csv", outpath = "transclusters.csv", n=5):
-  k_means = cluster.KMeans(n_clusters=n)
-  df = pd.read_csv(inpath)
-  test = pd.read_csv(inpath)
-  col_labels = list(test.columns)
-  del test[col_labels[0]]
-  #Regularize
-  for col in list(test.columns):
-    bound = np.mean(list(test[col]))
-    regs = [elt/bound for elt in list(test[col])]
-    test[col] = regs
-    df[col] = regs
+final_features = "IP.JRN.ARTC.SC,BM.GSR.MRCH.CD,EG.EGY.PRIM.PP.KD,SH.ALC.PCAP.LI,EN.ATM.METH.EG.KT.CE,SP.URB.TOTL,NY.GDP.TOTL.RT.ZS,SP.URB.GROW,BM.GSR.CMCP.ZS,EP.PMP.DESL.CD,SP.URB.TOTL.IN.ZS"
 
-  #Fit the k means to our test data
-  k_means.fit(test)
-  labels = list(k_means.labels_)  #The label
-  score = k_means.score(test)
-  #names = [get_country_from_code(str(code)) for code in list(df['name'])]
-  #df['full_name'] = names
-  df['cluster'] = labels
-  df.to_csv(outpath)
-  return score
-
-# Adds the kmeans-cluster to the dataset
-def kmeans(inpath="data3.csv", outpath="data4.csv", covariancepath="cov.txt", n=6, m=10):
-  k_means = cluster.KMeans(n_clusters=n)
-  df = pd.read_csv(inpath)
-  test = pd.read_csv(inpath)
-  labels = list(df.columns)
-
-  #Delte the non numerical entries for data manipulation
-  del test[labels[0]]
-  del df[labels[0]]
-  del test['name']
-
-  #Regularize
-  for col in list(test.columns):
-    bound = np.mean(list(test[col]))
-    regs = [elt/bound for elt in list(test[col])]
-    test[col] = regs
-    df[col] = regs
-  trans = np.transpose(test)
-  trans.to_csv('transpose.csv')
-
-  #Fit the k means to our test data
-  k_means.fit(test)
-  labels = list(k_means.labels_)  #The label
-  score = k_means.score(test)
-  names = [get_country_from_code(str(code)) for code in list(df['name'])]
-  df['full_name'] = names
-  df['cluster'] = labels
-  df.to_csv(outpath)
-  return score
-
-
-def score_opt(max, path="data3.csv", error=80):
-  prev = 0
-  for i in range(2,max):
-    new_score = kmeans(inpath=path,n=i)
-    print abs(new_score - prev)
-    if abs(new_score - prev) < error:
-      print i
-      print "Finished k means analysis"
-      return kmeans(n=i)
-    prev = new_score
-
+# Regularizes features.
 def regularize(inpath, outpath):
   df = pd.read_csv(inpath)
   # For each column that is not names
@@ -95,54 +33,154 @@ def regularize(inpath, outpath):
   del df[col_labels[0]]
   df.to_csv(outpath, index=False)
 
-def trans_pca(n=2, inpath="trans_nonames.csv", clusterpath="feature_cluster.csv", outpath="pca.csv"):
+# Returns two dimensional projection of dataframe using PCA
+def pca_projection(inpath="extract_clusters.csv", outpath="projection.csv"):
   df = pd.read_csv(inpath)
-  clusters_df = pd.read_csv(clusterpath)
-  labels = list(df.columns)
-  names = list(df[labels[0]])
-  del df[labels[0]]
-  pca = PCA(n_components=n)
+  pca = PCA(n_components=2)
+  names = df['name']
+  del df['name']
+  clusters = df['cluster']
+  del df['cluster']
   df = pca.fit_transform(df)
   df = pd.DataFrame(df)
   df['name'] = names
-  df['clusters'] = clusters_df['cluster']
+  df['cluster'] = clusters
   df.to_csv(outpath, index=False)
 
+# Re-organizes the feature clusters using PCA
+def trans_pca(inpath="trans_nonames.csv", outpath="pca_comps.csv"):
+  df = pd.read_csv(inpath)
+  labels = list(df.columns)
+  names = list(df[labels[0]])
+  del df[labels[0]]
+  pca = PCA()
+  pca.fit(df)
+  variances = list(pca.explained_variance_ratio_ )
+
+  sum = 0
+  n_comp = 0
+  while(sum < 0.85):
+    sum += variances[n_comp]
+    n_comp += 1
+  print n_comp
+
+  pca = PCA(n_components=n_comp)
+  df = pca.fit_transform(df)
+  df = pd.DataFrame(df)
+  df['name'] = names
+  df.to_csv(outpath, index=False)
+
+# Returns the transpose of a dataframe; instead of countries along features,
+# plot features along countries
 def get_transpose(inpath="full_data_reg.csv", outpath="trans_nonames.csv"):
   df = pd.read_csv(inpath)
   labels = list(df.columns)
   del df['name']
   new_df = df.transpose()
-  new_df.to_csv(outpath, index=True)
+  new_df.to_csv(outpath, index=False)
   return new_df
 
-# Adds the kmeans-cluster to the dataset
-def feature_cluster(inpath="trans_nonames.csv", outpath="feature_cluster.csv", n=7):
-  k_means = cluster.KMeans(n_clusters=n)
+# Euclidean distance between two vectors
+def dist(a, b):
+  if len(a) <> len(b):
+    return -1
+  else:
+    sum = 0
+    for i in range(0, len(a)):
+      sum += (a[i] - b[i])**2
+    return sqrt(sum)
+
+# For a dataframe consisting of clustered features
+#  compute its score, i.e. the average distance from each point to the centroid of its cluster
+def score(df):
+  labels = list(df.columns)
+  labels = [label for label in labels if label not in ['name','cluster']]
+  # Group the data into clusters of points
+  clusters = {}
+  for index, row in df.iterrows():
+    point = [row[label] for label in labels]
+    point = np.array(point)
+    cluster = row["cluster"]
+    if cluster in clusters:
+      clusters[cluster].append(point)
+    else:
+      clusters[cluster] = [point]
+  num_points =  df.shape[0] + 0.0
+  # Get the sum of squared errors
+  sse = 0
+  for label in clusters:
+    centroid = []
+    group = clusters[label]
+    length = len(group) + 0.0
+    # Compute each coordinate of the centroid
+    for index in range(0, len(group[0])):
+      sum = np.sum(np.array([point[index] for point in group]))/length
+      centroid.append(sum)
+    # Add the sum squared errors for the cluster
+    for index in range(0, len(group)):
+      sse += dist(centroid, group[index])**2
+  return sse
+
+# Create the plot of sum of squared errors vs k to find the "best" k for k means
+def elbow_plot(inpath="pca_comps.csv", n_max=10):
   df = pd.read_csv(inpath)
   labels = list(df.columns)
 
   #Delete the feature names
-  del df[labels[0]]
+  del df['name']
 
+  scores = []
+  for n in range(1,n_max):
+    k_means = cluster.KMeans(n_clusters=n)
+    #Fit the k means to our test data
+    k_means.fit(df)
+    labels = list(k_means.labels_)  #The labels
+    df['cluster'] = labels
+    k_score = score(df)
+    scores.append(k_score)
+
+  k_range = [i for i in range(1,n_max)]
+  plt.plot(k_range, scores, alpha=0.5)
+  plt.title("Score vs. number of clusters")
+  plt.ylabel('Score')
+  plt.xlabel('k')
+  plt.savefig('clusters.png')
+  plt.show()
+
+# Group into clusters and draw the clusters
+def create_clusters(inpath="pca_comps.csv", outpath="feature_cluster_comp.csv", n=3):
+  df = pd.read_csv(inpath)
+  labels = list(df.columns)
+
+  #Delete the feature names
+  names = df['name']
+  del df['name']
+
+  k_means = cluster.KMeans(n_clusters=n)
   #Fit the k means to our test data
   k_means.fit(df)
   labels = list(k_means.labels_)  #The labels
   df['cluster'] = labels
+  df['name'] = names
   df.to_csv(outpath, index=False)
   return df.as_matrix()
 
-def draw_clusters(inpath="pca.csv"):
-  colors = ["red", "blue", "green", "orange", "purple", "gray", "white", "yellow", "violet", "gray"]
+# Draw clusters craeted from k-means
+def draw_clusters(inpath="named_feature_cluster_comp.csv"):
+  colors = ["red", "blue", "orange"]
   df = pd.read_csv(inpath)
   x = df['0']
   y = df['1']
-  colors = [colors[int(i)] for i in df['clusters']]
-  plt.scatter(x, y, c=colors, alpha=0.5)
-  plt.savefig('clusters.png')
+  colors = [colors[int(i)] for i in df['cluster']]
+  indic_names = df['indicator_name']
+  plt.scatter(x, y, c=colors)
+  for i in range(0,len(x)):
+    plt.annotate(indic_names[i], (x[i],y[i]))
+  plt.savefig('clusters_labeled.png')
   plt.show()
 
-def indic_names(inpath="pca.csv", outpath="named_feature_clusters.csv"):
+# Given a set of indicators, add on the full names as a column
+def indic_names(inpath="feature_cluster_comp.csv", outpath="named_feature_cluster_comp.csv"):
   df = pd.read_csv(inpath)
   indics = list(df['name'])
   full_names = [get_name_of_indicator(indic) for indic in indics]
@@ -150,33 +188,44 @@ def indic_names(inpath="pca.csv", outpath="named_feature_clusters.csv"):
   df.to_csv(outpath, index=False)
   print "Done"
 
-def extract_relevant_features(inpath="named_feature_clusters.csv", outpath="relevant.csv"):
+# Creates an elbow plot for k-means on nations with restricted feature set
+def elbow_plot_nations(feats, inpath="full_data_reg.csv", outpath="full_data_extract.csv"):
+  features = feats.split(",")
+  features.append('name')
   df = pd.read_csv(inpath)
-  clusters = list(df['clusters'])
-  names = list(df['name'])
-  print len(names)
-  cats = [0]*7
-  #print clusters
-  for j in range(0, len(clusters)):
-    clusterno = cats[int(clusters[j])]
-    if clusterno == 0:
-      cats[int(clusters[j])] = [names[j]]
-    else:
-      cats[int(clusters[j])].append(names[j])
-  sum = 0
-  for group in cats:
-    print len(group)
-    sum += len(group)
-  print sum
-      #if clusters[]
-      #clusters[i] = clusters[clusters[j]]
+  # Get the relevant features into our dataframe
+  df = df[features]
+  # Store the names of countries for later
+  names = df['name']
+  df.to_csv(outpath, index=False)
+  # Use the elbow plot to determine the best number 
+  elbow_plot(inpath=outpath,n_max=10)
 
-#regularize(inpath="full_data_clean.csv", outpath="full_data_reg.csv")
-#get_transpose()
-## Delete top row of input
-feature_cluster(n=10)
-trans_pca(n=20)
-draw_clusters()
-indic_names()
+def get_nation_names(inpath="extract_clusters.csv", outpath="final_clusters.csv"):
+  df = pd.read_csv(inpath)
+  names = [get_country_from_code(str(code)) for code in list(df['name'])]
+  df['full_name'] = names
+  df.to_csv(outpath, index=False)
 
-#extract_relevant_features()
+def final_plot(inpath="final_clusters.csv"):
+  colors = ["red", "blue", "green", "orange"]
+  df = pd.read_csv(inpath)
+  x = df['0']
+  y = df['1']
+  names = df['full_name']
+  colors = [colors[int(i)] for i in df['cluster']]
+  plt.scatter(x, y, c=colors, alpha=0.5)
+  plt.savefig('final_clusters.png')
+  plt.show()
+
+#trans_pca()
+#elbow_plot()
+#create_clusters()
+#indic_names()
+#draw_clusters()
+
+
+#elbow_plot_nations(final_features)
+create_clusters(inpath="full_data_extract.csv", outpath="nation_clusters2.csv", n=4)
+pca_projection(inpath="nation_clusters2.csv", outpath="projection.csv")
+get_nation_names(inpath="projection.csv")
